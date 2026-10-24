@@ -202,7 +202,9 @@ class EvidenceIndex:
         for event in self.activities:
             stamp=dt(event.get("event_time"))
             rid=str(event.get("resource_id") or "").strip()
-            if not stamp or not rid: continue
+            # Activity feeds can include document/object-store handles. Only index
+            # identifiers from namespaces defined by participant-visible resource data.
+            if not stamp or not rid or not RES.fullmatch(rid): continue
             link_keys=set()
             for k in ("details","resource_id","source_system","target_system"):
                 link_keys |= identity_keys(event.get(k), k)
