@@ -175,9 +175,13 @@ def run(input_path=None, output_path=None):
     valid = {r["file_id"] for r in evidence.manifest}
     validation = validate_output(out, [r["case_id"] for r in requests], valid)
     counts = dict(Counter(r["deletion_status"] for r in out))
-    return {"output":str(output_path), "input_rows":len(requests), "output_rows":len(out), "status_counts":counts,
-            "unmatched_cases":unmatched, "evidence_files":len(evidence.manifest), "indexed_observations":len(evidence.observations),
-            "identifier_index_keys":len(evidence.index), "evidence_manifest_sha256":evidence.fingerprint, "steps":validation["steps"], "elapsed_seconds":round(time.perf_counter()-started,3)}
+    summary = {"output":str(output_path), "input_rows":len(requests), "output_rows":len(out), "status_counts":counts,
+               "unmatched_cases":unmatched, "evidence_files":len(evidence.manifest), "indexed_observations":len(evidence.observations),
+               "identifier_index_keys":len(evidence.index), "evidence_manifest_sha256":evidence.fingerprint, "steps":validation["steps"], "elapsed_seconds":round(time.perf_counter()-started,3)}
+    # Save the full-run stats automatically so manual and CI runs produce the same audit record.
+    if input_path.resolve() == (DATA/"deletion_requests.csv").resolve():
+        (ROOT/"run_stats.json").write_text(json.dumps(summary, indent=2, sort_keys=True), encoding="utf-8")
+    return summary
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
