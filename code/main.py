@@ -154,14 +154,14 @@ def run(input_path=None, output_path=None):
         email = request.get("email","")
         uid = resolve_user(email, dt(request.get("requested_at")), users, email_index, audit)
         aliases = aliases_for(uid or "", users.get(uid or ""), audit, cutoff, email)
-        observations = evidence.for_user(aliases, cutoff)
+        observations = evidence.for_user(aliases, cutoff, request.get("request_text",""), request.get("reported_at"))
         # If email history is ambiguous, evidence may uniquely bind it to one stable user_id.
         if not uid and observations:
             refs = {k[2:] for obs in observations for k in obs["keys"] if k.startswith("U:")}
             if len(refs) == 1:
                 uid = next(iter(refs))
                 aliases = aliases_for(uid, users.get(uid), audit, cutoff, email)
-                observations = evidence.for_user(aliases, cutoff)
+                observations = evidence.for_user(aliases, cutoff, request.get("request_text",""), request.get("reported_at"))
         if not observations:
             unmatched += 1
             status, steps = "INCOMPLETE", []
@@ -175,6 +175,8 @@ def run(input_path=None, output_path=None):
         writer = csv.DictWriter(f, fieldnames=FIELDS, lineterminator="\n")
         writer.writeheader(); writer.writerows(out)
     valid = {r["file_id"] for r in evidence.manifest}
+    valid.update(str(a["activity_id"]) for a in evidence.activities if a.get("activity_id"))
+    valid.update(str(a["audit_id"]) for a in audit if a.get("audit_id"))
     validation = validate_output(out, [r["case_id"] for r in requests], valid)
     counts = dict(Counter(r["deletion_status"] for r in out))
     summary = {"output":str(output_path), "input_rows":len(requests), "output_rows":len(out), "status_counts":counts,
