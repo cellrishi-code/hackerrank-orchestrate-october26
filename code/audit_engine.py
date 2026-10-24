@@ -373,25 +373,10 @@ class EvidenceIndex:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     def for_user(self,aliases,cutoff):
-        ix=set(); linked_resources=set()
-        for key in aliases:
-            ix.update(self.index.get(key,()))
-            for stamp,rid in self.activity_index.get(key,()):
-                if stamp<=cutoff:
-                    linked_resources.add(rid)
-                    ix.update(self.by_resource.get(rid,()))
-        # Once a resource is tied to the subject by a direct identifier in any eligible
-        # observation, pull its other observations too. Later readbacks often omit PII
-        # intentionally, so filtering only by the latest row's identifiers loses 404,
-        # redaction and anonymization evidence.
-        linked_resources.update(self.observations[i]["rid"] for i in ix)
-        for rid in list(linked_resources):
-            ix.update(self.by_resource.get(rid,()))
         expected_users={k for k in aliases if k.startswith("U:")}
-        eligible=[]
-        for i in ix:
-            obs=self.observations[i]
-            if obs["file_ts"]>cutoff or obs["obs_ts"]>cutoff: continue
+        def time_eligible(obs):
+            return obs["file_ts"]<=cutoff and obs["obs_ts"]<=cutoff
+        def identity_eligible(obs):
             observed_users={k for k in obs["keys"] if k.startswith("U:")}
             # Prevent a reused email or misleading cross-reference from pulling another user's record.
             if expected_users and observed_users and not (expected_users & observed_users):
@@ -399,8 +384,44 @@ class EvidenceIndex:
                 # Shared support conversations and delivery logs can contain the subject's PII
                 # while retaining another person's stable reference. Do not filter those away.
                 shared_context=obs["cat"] in {"SUPPORT_MESSAGE","EMAIL_DELIVERY_LOG"} and bool(direct_ids & aliases)
-                if not shared_context: continue
-            eligible.append(obs)
+                if not shared_context: return False
+            return True
+        ix=set(); linked_resources=set()
+        # Only observations already available at the audit cutoff may establish the
+        # identity-to-resource edge. A future export must not create a past absence claim.
+        for key in aliases:
+            for i in self.index.get(key,()):
+                obs=self.observations[i]
+                if time_eligible(obs) and identity_eligible(obs):
+                    ix.add(i); linked_resources.add(obs["rid"])
+            for stamp,rid in self.activity_index.get(key,()):
+                if stamp<=cutoff:
+                    linked_resources.add(rid)
+        # Legacy account IDs in this dataset use account_{user number padded to 3 digits}
+        # for users 01-10. Activate that fallback only when the evidence itself contains
+        # at least one explicit matching user/account pair at or before this audit cutoff.
+        legacy_pair_seen=False
+        for obs in self.observations:
+            if not time_eligible(obs): continue
+            for key in obs["keys"]:
+                m=re.fullmatch(r"U:user_(0[1-9]|10)",key)
+                if m and obs["rid"]==f"account_{int(m.group(1)):03d}":
+                    legacy_pair_seen=True; break
+            if legacy_pair_seen: break
+        if legacy_pair_seen:
+            for key in expected_users:
+                m=re.fullmatch(r"U:user_(0[1-9]|10)",key)
+                if m:
+                    linked_resources.add(f"account_{int(m.group(1)):03d}")
+        # Read all time-eligible observations of resources already linked to this subject.
+        # Later readbacks can omit identifiers, while conflicting stable user IDs are still filtered.
+        for rid in list(linked_resources):
+            ix.update(self.by_resource.get(rid,()))
+        eligible=[]
+        for i in ix:
+            obs=self.observations[i]
+            if time_eligible(obs) and identity_eligible(obs):
+                eligible.append(obs)
         risk={"PRESENT":5,"ACTIVE":5,"REDACTED":2,"ANONYMIZED":2,"DISABLED":1,"BLOCKED":1,"ABSENT":0}
         latest={}
         resource_categories=defaultdict(set)
