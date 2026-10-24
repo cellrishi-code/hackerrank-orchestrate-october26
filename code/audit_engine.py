@@ -274,12 +274,13 @@ class EvidenceIndex:
         pending_by_trace = {}
         for line in text.splitlines():
             resources=list(dict.fromkeys(RES.findall(line)))
-            if not resources: continue
             event=re.search(r"\bevent=([A-Za-z0-9_-]+)",line,re.I)
             match=TS.search(line); stamp=dt(match.group(0) if match else "") or file_ts
-            data={"resource_id":resources[0]}
+            data={}
             for m in re.finditer(r'\b([A-Za-z][A-Za-z0-9_]*)=(?:"([^"]*)"|\'([^\']*)\'|([^\s]+))',line):
                 data[m.group(1)]=next((x for x in m.groups()[1:] if x is not None),"")
+            if resources and not data.get("resource_id"):
+                data["resource_id"]=resources[0]
             if "|" in line:
                 parts=[p.strip() for p in line.split("|")]
                 if len(parts)>=5:
@@ -289,8 +290,8 @@ class EvidenceIndex:
             trace_id=str(data.get("trace_id") or "").strip()
             event_name=event.group(1).casefold() if event else ""
             if event_name.endswith(("_started","_start")):
-                # A start line often carries lookup_key while the completion line carries
-                # rows=0/HTTP 404. Join them by trace ID so absence evidence remains attributable.
+                # Start lines can omit resource_id while still carrying the subject lookup key.
+                # Preserve them by trace ID and join them to the resource-bearing completion.
                 if trace_id:
                     pending_by_trace[trace_id]=(dict(data),line,stamp,system)
                 continue
@@ -301,8 +302,11 @@ class EvidenceIndex:
                     if key not in data or data[key] in ("",None):
                         data[key]=value
                 combined_raw=start_line+"\n"+line
-                # Both lines belong to the same trace; keep the completion timestamp for state.
                 system=system if system and system!=path.stem else start_system
+            if not data.get("resource_id"):
+                resources=list(dict.fromkeys(RES.findall(combined_raw)))
+                if resources: data["resource_id"]=resources[0]
+            if not data.get("resource_id"): continue
             self._add(data,row["file_id"],path,file_ts,stamp,system,path.stem,combined_raw)
     def _load_pdf(self,path,row,file_ts):
         text=""
