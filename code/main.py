@@ -68,7 +68,9 @@ def build_plan(observations, aliases):
             # Match a direct identifier, not only the permitted stable internal user reference.
             if is_direct_match(obs["keys"], aliases):
                 issues.append((obs, "REPORT_EXPOSED_PII", "REDACT_RECORD"))
-            elif state == "REDACTED":
+            elif state == "REDACTED" or cat in {"SUPPORT_MESSAGE","EMAIL_DELIVERY_LOG"}:
+                # These records may legitimately remain after PII has been removed;
+                # absence of a direct identifier is the evidence-backed redaction condition.
                 verified.append((obs, "VERIFY_RECORD_REDACTED"))
         elif cat in anon_categories:
             if direct: issues.append((obs, "REPORT_EXPOSED_PII", "ANONYMIZE_RECORD"))
