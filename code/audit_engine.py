@@ -172,7 +172,7 @@ class EvidenceIndex:
     def __init__(self):
         self.manifest=load_csv(DATA/"evidence_files.csv")
         self.activities=load_csv(DATA/"system_activity.csv")
-        self.file_hashes={}
+        self.file_hashes={}; self.coverage=[]
         self.observations=[]; self.index=defaultdict(list); self.by_resource=defaultdict(list); self.activity_index=defaultdict(list)
         self._load()
         for i,o in enumerate(self.observations):
@@ -209,6 +209,12 @@ class EvidenceIndex:
             src=next((obj[k] for k in ("data_store","system_id","origin_system","system") if isinstance(obj.get(k),str)),system)
             if obj.get("resource_id"):
                 self._add(obj,eid,path,file_ts,stamp,src,context,json.dumps(obj,ensure_ascii=False)); return
+            # A collection snapshot, including an explicit empty records array, is evidence of coverage.
+            if isinstance(obj.get("records"),list) and any(k in obj for k in ("data_store","system_id","system","collection","collection_name")):
+                cover_sys=norm_system(src,"")
+                cover_cat=categorize({},cover_sys,"",str(obj.get("collection") or obj.get("collection_name") or context))
+                resource_ids={str(r.get("resource_id")) for r in obj["records"] if isinstance(r,dict) and r.get("resource_id")}
+                self.coverage.append({"eid":eid,"file_ts":file_ts,"obs_ts":stamp,"system":cover_sys,"cat":cover_cat,"rids":resource_ids})
             for k,v in obj.items():
                 name=str(k).casefold(); next_src=k if name in SYSTEMS else src
                 self._walk_json(v,stamp,eid,path,next_src,(context+" "+name).strip())
@@ -232,14 +238,32 @@ class EvidenceIndex:
             for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
                 q='"'+table.replace('"','""')+'"'
                 cols=[v[1] for v in db.execute("PRAGMA table_info("+q+")")]
+                resource_ids=set(); scopes=set()
                 for values in db.execute("SELECT * FROM "+q):
                     data=dict(zip(cols,values))
                     try:
                         nested=json.loads(data.get("record_json",""))
                         if isinstance(nested,dict): data.update(nested)
                     except (json.JSONDecodeError,TypeError): pass
+                    rid=str(data.get("resource_id") or data.get("record_id") or "")
+                    if rid: resource_ids.add(rid)
+                    hint=data.get("origin_system") or data.get("system_id") or path.stem
+                    system=norm_system(hint,rid)
+                    cat=categorize(data,system,rid,table)
+                    scopes.add((system,cat))
                     stamp=dt(data.get("observed_at") or data.get("updated_at") or data.get("captured_at")) or file_ts
-                    self._add(data,row["file_id"],path,file_ts,stamp,data.get("origin_system") or data.get("system_id") or path.stem,table,json.dumps(data,ensure_ascii=False))
+                    self._add(data,row["file_id"],path,file_ts,stamp,hint,table,json.dumps(data,ensure_ascii=False))
+                if table.casefold().startswith("customer_data_"):
+                    self.coverage.append({"eid":row["file_id"],"file_ts":file_ts,"obs_ts":file_ts,"system":"*","cat":"*","rids":resource_ids})
+                elif scopes:
+                    for system,cat in scopes:
+                        ids={rid for rid in resource_ids if any(o["rid"]==rid and o["system"]==system and o["cat"]==cat for o in self.observations if o["eid"]==row["file_id"])}
+                        self.coverage.append({"eid":row["file_id"],"file_ts":file_ts,"obs_ts":file_ts,"system":system,"cat":cat,"rids":ids})
+                else:
+                    t=table.casefold()
+                    hints=[("account","account_service","USER_PROFILE"),("profile","account_service","USER_PROFILE"),("search","search_service","SEARCH_INDEX_ENTRY"),("analytics","analytics_platform","ANALYTICS_PROFILE"),("support","support_platform","SUPPORT_MESSAGE"),("attachment","support_platform","SUPPORT_ATTACHMENT"),("export","export_service","USER_EXPORT"),("marketing","marketing_service","MARKETING_PROFILE"),("backup","backup_service","BACKUP_ARCHIVE"),("audit","security_service","SECURITY_AUDIT_LOG"),("cache","cache_service","CACHE_ENTRY")]
+                    match=next(((s,cat) for token,s,cat in hints if token in t),None)
+                    if match: self.coverage.append({"eid":row["file_id"],"file_ts":file_ts,"obs_ts":file_ts,"system":match[0],"cat":match[1],"rids":resource_ids})
         except sqlite3.Error as err:
             print(f"warning: SQL parse failed for {path.name}: {err}",file=sys.stderr)
             self._load_text(path,row,file_ts,path.read_text(encoding="utf-8",errors="replace"))
@@ -305,11 +329,12 @@ class EvidenceIndex:
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     def for_user(self,aliases,cutoff):
-        ix=set()
+        ix=set(); linked_resources=set()
         for key in aliases:
             ix.update(self.index.get(key,()))
             for stamp,rid in self.activity_index.get(key,()):
                 if stamp<=cutoff:
+                    linked_resources.add(rid)
                     ix.update(self.by_resource.get(rid,()))
         expected_users={k for k in aliases if k.startswith("U:")}
         eligible=[]
@@ -320,11 +345,30 @@ class EvidenceIndex:
             # Prevent a reused email or misleading cross-reference from pulling another user's record.
             if expected_users and observed_users and not (expected_users & observed_users): continue
             eligible.append(obs)
-        found=eligible
         risk={"PRESENT":5,"ACTIVE":5,"REDACTED":2,"ANONYMIZED":2,"DISABLED":1,"BLOCKED":1,"ABSENT":0}
         latest={}
-        for o in sorted(found,key=lambda x:(x["obs_ts"],x["file_ts"],x["eid"])):
+        for o in sorted(eligible,key=lambda x:(x["obs_ts"],x["file_ts"],x["eid"])):
             key=(o["system"],o["rid"]); prev=latest.get(key)
             if prev is None or (o["obs_ts"],o["file_ts"])>(prev["obs_ts"],prev["file_ts"]): latest[key]=o
             elif (o["obs_ts"],o["file_ts"])==(prev["obs_ts"],prev["file_ts"]) and risk.get(o["state"],3)>risk.get(prev["state"],3): latest[key]=o
+        # Synthesize point-in-time absence only when a resource is explicitly linked to this identity
+        # by activity and the newest applicable database/collection snapshot omits it.
+        for rid in linked_resources:
+            system=norm_system("",rid)
+            cat=categorize({},system,rid,rid)
+            matching=[c for c in self.coverage if c["file_ts"]<=cutoff and c["obs_ts"]<=cutoff and c["system"] in {"*",system} and c["cat"] in {"*",cat}]
+            if not matching: continue
+            groups=defaultdict(list)
+            for c in matching: groups[(c["obs_ts"],c["file_ts"])].append(c)
+            newest=max(groups)
+            snapshot_rows=groups[newest]
+            covered_ids=set().union(*(c["rids"] for c in snapshot_rows))
+            if rid in covered_ids: continue
+            previous=[o for o in self.observations if o["rid"]==rid and o["system"]==system and o["file_ts"]<=cutoff and o["obs_ts"]<=cutoff]
+            latest_previous=max(((o["obs_ts"],o["file_ts"]) for o in previous),default=None)
+            if latest_previous is not None and latest_previous>=newest: continue
+            eid=sorted(c["eid"] for c in snapshot_rows)[0]
+            latest[(system,rid)]={"rid":rid,"system":system,"cat":cat,"state":"ABSENT","eid":eid,
+                "file_ts":newest[1],"obs_ts":newest[0],"keys":set(aliases),"data":{"resource_id":rid,"state":"ABSENT"},
+                "raw":"resource absent from complete point-in-time snapshot","path":"derived from "+eid}
         return sorted(latest.values(),key=lambda o:(o["system"],o["rid"]))
