@@ -1,6 +1,6 @@
 """Efficient evidence loader and identity index for the deletion-audit pipeline."""
 from __future__ import annotations
-import csv, hashlib, json, re, sqlite3, shutil, subprocess, sys
+import csv, hashlib, json, re, sqlite3, shutil, subprocess, sys, tempfile
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -346,6 +346,22 @@ class EvidenceIndex:
             try:
                 result=subprocess.run(["pdftotext",str(path),"-"],capture_output=True,text=True,timeout=15)
                 if result.returncode==0: text=result.stdout
+            except (OSError,subprocess.SubprocessError): pass
+        # Some evidence PDFs are scans with no embedded text layer. When ordinary
+        # extraction returns nothing, render at most four pages and OCR them with
+        # bounded subprocess timeouts; the code remains usable without optional tools.
+        if not text and shutil.which("pdftoppm") and shutil.which("tesseract"):
+            try:
+                with tempfile.TemporaryDirectory(prefix="ghost-pdf-ocr-") as tmp:
+                    prefix=str(Path(tmp)/"page")
+                    subprocess.run(["pdftoppm","-f","1","-l","4","-r","160","-png",str(path),prefix],
+                                   capture_output=True,text=True,timeout=25,check=True)
+                    pages=[]
+                    for image_path in sorted(Path(tmp).glob("page-*.png")):
+                        result=subprocess.run(["tesseract",str(image_path),"stdout","--psm","6"],
+                                              capture_output=True,text=True,timeout=12)
+                        if result.returncode==0 and result.stdout.strip(): pages.append(result.stdout)
+                    text="\n".join(pages)
             except (OSError,subprocess.SubprocessError): pass
         if text: self._load_text(path,row,file_ts,text)
     def _load_image(self,path,row,file_ts):
