@@ -36,8 +36,7 @@ jobs:
       - name: Generate and validate all 518 predictions
         shell: bash
         run: |
-          set -o pipefail
-          python code/main.py | tee run_stats.json
+          python code/main.py
       - name: Evaluate public samples and safety cases
         run: python code/evaluation/main.py
       - name: Package submission code
