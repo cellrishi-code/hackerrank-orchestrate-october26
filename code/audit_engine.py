@@ -271,11 +271,11 @@ class EvidenceIndex:
     def _load_text(self,path,row,file_ts,text=None):
         try: text=text if text is not None else path.read_text(encoding="utf-8",errors="replace")
         except OSError: return
+        pending_by_trace = {}
         for line in text.splitlines():
             resources=list(dict.fromkeys(RES.findall(line)))
             if not resources: continue
             event=re.search(r"\bevent=([A-Za-z0-9_-]+)",line,re.I)
-            if event and event.group(1).casefold().endswith(("_started","_start")): continue
             match=TS.search(line); stamp=dt(match.group(0) if match else "") or file_ts
             data={"resource_id":resources[0]}
             for m in re.finditer(r'\b([A-Za-z][A-Za-z0-9_]*)=(?:"([^"]*)"|\'([^\']*)\'|([^\s]+))',line):
@@ -286,7 +286,24 @@ class EvidenceIndex:
                     data.setdefault("system",parts[1]); data.setdefault("resource_type",parts[3]); data.setdefault("result",parts[4])
                     data["line_identifiers"]=" ".join(parts[5:])
             system=next((m.group(1) for m in [re.search(r"\b(?:service|system|target_system)=([A-Za-z0-9_-]+)",line,re.I)] if m),path.stem)
-            self._add(data,row["file_id"],path,file_ts,stamp,system,path.stem,line)
+            trace_id=str(data.get("trace_id") or "").strip()
+            event_name=event.group(1).casefold() if event else ""
+            if event_name.endswith(("_started","_start")):
+                # A start line often carries lookup_key while the completion line carries
+                # rows=0/HTTP 404. Join them by trace ID so absence evidence remains attributable.
+                if trace_id:
+                    pending_by_trace[trace_id]=(dict(data),line,stamp,system)
+                continue
+            combined_raw=line
+            if trace_id and trace_id in pending_by_trace:
+                start_data,start_line,start_stamp,start_system=pending_by_trace.pop(trace_id)
+                for key,value in start_data.items():
+                    if key not in data or data[key] in ("",None):
+                        data[key]=value
+                combined_raw=start_line+"\n"+line
+                # Both lines belong to the same trace; keep the completion timestamp for state.
+                system=system if system and system!=path.stem else start_system
+            self._add(data,row["file_id"],path,file_ts,stamp,system,path.stem,combined_raw)
     def _load_pdf(self,path,row,file_ts):
         text=""
         try:
