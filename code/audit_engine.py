@@ -1,6 +1,6 @@
 """Efficient evidence loader and identity index for the deletion-audit pipeline."""
 from __future__ import annotations
-import csv, json, re, sqlite3, shutil, subprocess, sys
+import csv, hashlib, json, re, sqlite3, shutil, subprocess, sys
 from collections import defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
@@ -172,6 +172,7 @@ class EvidenceIndex:
     def __init__(self):
         self.manifest=load_csv(DATA/"evidence_files.csv")
         self.activities=load_csv(DATA/"system_activity.csv")
+        self.file_hashes={}
         self.observations=[]; self.index=defaultdict(list); self.by_resource=defaultdict(list); self.activity_index=defaultdict(list)
         self._load()
         for i,o in enumerate(self.observations):
@@ -287,6 +288,8 @@ class EvidenceIndex:
                 if root not in path.parents: continue
             except (OSError,ValueError): continue
             if not path.is_file(): continue
+            try: self.file_hashes[row["file_id"]]=hashlib.sha256(path.read_bytes()).hexdigest()
+            except OSError: continue
             file_ts=dt(row.get("captured_at")) or datetime.min.replace(tzinfo=timezone.utc)
             ext=path.suffix.casefold()
             if ext==".json": self._load_json(path,row,file_ts)
@@ -294,6 +297,13 @@ class EvidenceIndex:
             elif ext==".pdf": self._load_pdf(path,row,file_ts)
             elif ext in {".png",".jpg",".jpeg",".webp"}: self._load_image(path,row,file_ts)
             else: self._load_text(path,row,file_ts)
+    @property
+    def fingerprint(self):
+        payload="\n".join(
+            f"{row.get('file_id','')}|{row.get('file_path','')}|{row.get('captured_at','')}|{self.file_hashes.get(row.get('file_id',''),'MISSING')}"
+            for row in sorted(self.manifest,key=lambda r:r.get("file_id",""))
+        )
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
     def for_user(self,aliases,cutoff):
         ix=set()
         for key in aliases:
@@ -301,7 +311,16 @@ class EvidenceIndex:
             for stamp,rid in self.activity_index.get(key,()):
                 if stamp<=cutoff:
                     ix.update(self.by_resource.get(rid,()))
-        found=[self.observations[i] for i in ix if self.observations[i]["file_ts"]<=cutoff and self.observations[i]["obs_ts"]<=cutoff]
+        expected_users={k for k in aliases if k.startswith("U:")}
+        eligible=[]
+        for i in ix:
+            obs=self.observations[i]
+            if obs["file_ts"]>cutoff or obs["obs_ts"]>cutoff: continue
+            observed_users={k for k in obs["keys"] if k.startswith("U:")}
+            # Prevent a reused email or misleading cross-reference from pulling another user's record.
+            if expected_users and observed_users and not (expected_users & observed_users): continue
+            eligible.append(obs)
+        found=eligible
         risk={"PRESENT":5,"ACTIVE":5,"REDACTED":2,"ANONYMIZED":2,"DISABLED":1,"BLOCKED":1,"ABSENT":0}
         latest={}
         for o in sorted(found,key=lambda x:(x["obs_ts"],x["file_ts"],x["eid"])):
