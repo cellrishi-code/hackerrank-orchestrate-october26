@@ -216,7 +216,16 @@ class EvidenceIndex:
         except (OSError,json.JSONDecodeError): return
         self._walk_json(data,file_ts,row["file_id"],path)
     def _load_sql(self,path,row,file_ts):
+        # Evidence SQL is executed only in an ephemeral in-memory database.
+        # Deny filesystem attachment and extension loading, even if an evidence file is malformed.
         db=sqlite3.connect(":memory:")
+        denied={sqlite3.SQLITE_ATTACH,sqlite3.SQLITE_DETACH}
+        def authorize(action,arg1,arg2,dbname,trigger):
+            if action in denied: return sqlite3.SQLITE_DENY
+            if action==sqlite3.SQLITE_FUNCTION and str(arg2 or arg1 or "").casefold() in {"load_extension","readfile","writefile"}:
+                return sqlite3.SQLITE_DENY
+            return sqlite3.SQLITE_OK
+        db.set_authorizer(authorize)
         try:
             db.executescript(path.read_text(encoding="utf-8",errors="replace"))
             for (table,) in db.execute("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"):
