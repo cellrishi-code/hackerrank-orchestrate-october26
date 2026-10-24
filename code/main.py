@@ -177,7 +177,7 @@ def run(input_path=None, output_path=None):
     counts = dict(Counter(r["deletion_status"] for r in out))
     return {"output":str(output_path), "input_rows":len(requests), "output_rows":len(out), "status_counts":counts,
             "unmatched_cases":unmatched, "evidence_files":len(evidence.manifest), "indexed_observations":len(evidence.observations),
-            "identifier_index_keys":len(evidence.index), "steps":validation["steps"], "elapsed_seconds":round(time.perf_counter()-started,3)}
+            "identifier_index_keys":len(evidence.index), "evidence_manifest_sha256":evidence.fingerprint, "steps":validation["steps"], "elapsed_seconds":round(time.perf_counter()-started,3)}
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
