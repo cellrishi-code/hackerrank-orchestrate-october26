@@ -67,8 +67,12 @@ def norm_system(value, rid=""):
     if s in SYSTEMS: return SYSTEMS[s]
     for key,val in SYSTEMS.items():
         if key in s: return val
-    prefix=rid.split("_",1)[0].casefold()
-    return PREFIX.get(prefix,s or "unknown_system")
+    # Several resource namespaces contain underscores (audit_record, data_flow,
+    # email_delivery, legal_hold); recognize the longest prefix, not just the first token.
+    rid_norm=str(rid or "").casefold()
+    for prefix,val in sorted(PREFIX.items(),key=lambda item:len(item[0]),reverse=True):
+        if rid_norm.startswith(prefix+"_"): return val
+    return s or "unknown_system"
 
 def categorize(data, system, rid, context=""):
     # Respect an explicit policy category before inferring from system/resource naming.
@@ -115,13 +119,13 @@ def determine_state(data, cat, raw=""):
         if v in {"redacted","redaction_complete"}: return "REDACTED"
         if v in {"anonymized","anonymised","anonymous"}: return "ANONYMIZED"
     if cat=="DATA_FLOW":
-        vals=[flat.get(k,"") for k in ("enabled","active","sync_enabled","connector_enabled")]
-        if any(v in {"true","1","yes","enabled","active","running"} for v in vals): return "ACTIVE"
-        if any(v in {"false","0","no","disabled","inactive","stopped"} for v in vals): return "DISABLED"
+        vals=[flat.get(k,"") for k in ("enabled","active","sync_enabled","connector_enabled","result","reported_result","lookup_result","record_state","state","status")]
+        if any(v in {"true","1","yes","enabled","active","running","success","delivered"} for v in vals): return "ACTIVE"
+        if any(v in {"false","0","no","disabled","inactive","stopped","blocked","failed"} for v in vals): return "DISABLED"
     if cat=="BACKUP_ARCHIVE":
-        vals=[flat.get(k,"") for k in ("restore_allowed","restore_enabled","can_restore","restore_access_enabled")]
-        if any(v in {"true","1","yes","enabled","active","allowed"} for v in vals): return "ACTIVE"
-        if any(v in {"false","0","no","disabled","blocked","inactive"} for v in vals): return "BLOCKED"
+        vals=[flat.get(k,"") for k in ("restore_allowed","restore_enabled","can_restore","restore_access_enabled","result","reported_result","lookup_result","record_state","state","status")]
+        if any(v in {"true","1","yes","enabled","active","allowed","present"} for v in vals): return "ACTIVE"
+        if any(v in {"false","0","no","disabled","blocked","inactive","stopped","absent"} for v in vals): return "BLOCKED"
     if cat=="ACCOUNT_TOMBSTONE":
         return "PRESENT" if any(str(data.get(k) or "").strip() for k in ("name","full_name","email","phone","email_hash")) else "REDACTED"
     if cat in ANON:
@@ -141,7 +145,7 @@ def determine_state(data, cat, raw=""):
 def deletion_requested(text):
     s=(text or "").casefold().replace("’","'")
     if re.search(r"\b(?:do not|don't|dont|never)\s+(?:delete|erase|remove|close|deactivate)\b|\b(?:do not|don't|dont|never|not)\s+(?:want|wish|need|request|ask)\b.{0,40}\b(?:delete|erase|remove|close|deactivate)\b|\bnot\s+(?:a\s+)?(?:deletion|erasure|account closure)\s+request\b|\bwithout deleting\b|\binstead of deleting\b",s): return False
-    patterns=[r"\bdelet(?:e|ed|es|ing|ion|ions)\b",r"\berase(?:d|s|ure|ing)?\b",r"\bsuppression\b",r"\beffacement\b",r"\bremov(?:e|ed|es|ing|al|als)\b.{0,60}\b(?:account|profile|personal data|my data|records?|copy|file|search result|export|identifier|trace)\b",r"\bremov(?:e|ed|es|ing|al|als)\b",r"\bclose\b.{0,35}\baccount\b",r"\baccount closure\b",r"\bforget\b.{0,40}\b(?:me|my data|my account)\b",r"\b(?:confirm|check|verify|audit|inspect|investigate)\b.{0,90}\b(?:delet(?:ed|ion)|eras(?:ed|ure)|remov(?:ed|al)|gone|purged|wiped)\b",r"\b(?:no longer exists|still exists|still remains|left behind|left over|deletion status|deletion was complete|deletion is complete)\b",r"\beliminar\b",r"\bborrar\b",r"\bsupprimer\b",r"\beffacer\b",r"\blöschen\b",r"\bcancellare\b",r"\bdeletar\b",r"\bapagar\b",r"\b消去\b",r"\b削除\b",r"\b삭제\b"]
+    patterns=[r"\bdelet(?:e|ed|es|ing|ion|ions)\b",r"\berase(?:d|s|ure|ing)?\b",r"\bsuppression\b",r"\beffacement\b",r"\bremov(?:e|ed|es|ing|al|als)\b.{0,60}\b(?:account|profile|personal data|my data|records?|copy|file|search result|export|identifier|trace)\b",r"\bremov(?:e|ed|es|ing|al|als)\b",r"\bclose\b.{0,35}\baccount\b",r"\baccount closure\b",r"\bforget\b.{0,40}\b(?:me|my data|my account)\b",r"\b(?:confirm|check|verify|audit|inspect|investigate)\b.{0,90}\b(?:delet(?:ed|ion)|eras(?:ed|ure)|remov(?:ed|al)|gone|purged|wiped)\b",r"\b(?:no longer exists|still exists|still remains|left behind|left over|deletion status|deletion was complete|deletion is complete)\b",r"\beliminar\b",r"\bborrar\b",r"\bsupprimer\b",r"\beffacer\b",r"\blöschen\b",r"\bcancellare\b",r"\bdeletar\b",r"\bapagar\b",r"消去",r"削除",r"삭제",r"删除"]
     return any(re.search(p,s) for p in patterns)
 
 def build_users(identities,audit):
