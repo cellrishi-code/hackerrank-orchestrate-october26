@@ -45,6 +45,37 @@ def compare(reference, predicted):
         "predicted_steps": sum(len(steps(r.get("steps_json","[]"))) for r in predicted.values()),
     }
 
+def mismatch_details(reference, predicted):
+    """Small, deterministic signatures make public regression failures actionable."""
+    details = []
+    for cid in sorted(reference):
+        expected = reference[cid]
+        actual = predicted.get(cid, {"deletion_status":"MISSING", "steps_json":"[]"})
+        exp_steps = steps(expected["steps_json"])
+        got_steps = steps(actual.get("steps_json", "[]"))
+        if expected["deletion_status"] == actual.get("deletion_status") and exp_steps == got_steps:
+            continue
+        def signature(items):
+            return [
+                {
+                    "phase": item.get("phase"),
+                    "operation": item.get("operation"),
+                    "system_id": item.get("system_id"),
+                    "resource_id": item.get("resource_id"),
+                    "state": item.get("state"),
+                    "evidence_id": item.get("evidence_id"),
+                }
+                for item in items
+            ]
+        details.append({
+            "case_id": cid,
+            "expected_status": expected["deletion_status"],
+            "predicted_status": actual.get("deletion_status", "MISSING"),
+            "expected_steps": signature(exp_steps),
+            "predicted_steps": signature(got_steps),
+        })
+    return details
+
 def custom_tests():
     passed, failed = [], []
     tests = [
@@ -150,10 +181,12 @@ def main():
         reference = read_output(DATA / "sample_output.csv")
         predicted = read_output(sample_output)
         scores = compare(reference, predicted)
+        mismatches = mismatch_details(reference, predicted)
     passed, failed = custom_tests()
     write_reports(scores, passed, failed, stats or sample_stats, output)
     write_usage(stats or sample_stats)
-    print(json.dumps({"public_sample_metrics":scores,"custom_tests_passed":len(passed),"custom_test_failures":failed,
+    print(json.dumps({"public_sample_metrics":scores,"public_sample_mismatches":mismatches,
+                      "custom_tests_passed":len(passed),"custom_test_failures":failed,
                       "full_output_rows":len(read_output(output)),"reports":["code/evaluation/evaluation_report.md","code/evaluation/usage_report.md"]},indent=2,sort_keys=True))
     return 1 if failed else 0
 
