@@ -49,6 +49,7 @@ jobs:
             output.csv
             code.zip
             run_stats.json
+            log.txt
             code/evaluation/evaluation_report.md
             code/evaluation/usage_report.md
           if-no-files-found: error
