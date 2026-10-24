@@ -10,7 +10,7 @@ DATA = ROOT / "dataset"
 EMAIL = re.compile(r"(?i)(?<![A-Z0-9._%+-])[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}(?![A-Z0-9._%+-])")
 UID = re.compile(r"(?i)\buser_\d+\b")
 HASH = re.compile(r"(?i)\b[a-f0-9]{64}\b")
-RES = re.compile(r"(?i)\b(?:account|search|analytics|support|export|marketing|email_delivery|audit_record|tombstone|data_flow|backup|cache|telemetry|legal_hold|attachment|secondary)_[a-z0-9-]+\b")
+RES = re.compile(r"(?i)\b(?:account|search|analytics|support|export|marketing|email_delivery|audit_record|tombstone|data_flow|backup|cache|telemetry|legal_hold|attachment|secondary)_\d+\b")
 TS = re.compile(r"\b20\d{2}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\b")
 ID_FIELDS = {"user_id","customer_reference","subject_reference","user_reference","requester_id","owner_id","email","email_address","owner_email","customer_email","requester_email","phone","phone_number","email_hash","name","full_name","requester_name","matched_value","lookup_key","subject_key"}
 SYSTEMS = {"account_service":"account_service","profile_service":"account_service","customer_account_service":"account_service","search_service":"search_service","search_index":"search_service","analytics_platform":"analytics_platform","analytics_service":"analytics_platform","support_platform":"support_platform","support_service":"support_platform","export_service":"export_service","user_export_store":"export_service","marketing_service":"marketing_service","marketing_platform":"marketing_service","email_delivery_service":"email_delivery_service","notification_service":"notification_service","security_service":"security_service","identity_service":"identity_service","integration_service":"integration_service","connector_service":"integration_service","backup_service":"backup_service","archive_service":"backup_service","cache_service":"cache_service","legal_service":"legal_service"}
@@ -71,7 +71,23 @@ def norm_system(value, rid=""):
     return PREFIX.get(prefix,s or "unknown_system")
 
 def categorize(data, system, rid, context=""):
+    # Respect an explicit policy category before inferring from system/resource naming.
+    category_fields=("data_category","category","record_type","resource_type")
+    explicit_values={str(data.get(k,"")).casefold().replace("-","_").replace(" ","_") for k in category_fields if data.get(k)}
+    explicit_aliases={
+        "user_profile":"USER_PROFILE","secondary_identifier":"SECONDARY_IDENTIFIER",
+        "search_index_entry":"SEARCH_INDEX_ENTRY","cache_entry":"CACHE_ENTRY",
+        "support_message":"SUPPORT_MESSAGE","support_attachment":"SUPPORT_ATTACHMENT",
+        "analytics_profile":"ANALYTICS_PROFILE","product_telemetry":"PRODUCT_TELEMETRY",
+        "user_export":"USER_EXPORT","marketing_profile":"MARKETING_PROFILE",
+        "email_delivery_log":"EMAIL_DELIVERY_LOG","security_audit_log":"SECURITY_AUDIT_LOG",
+        "legal_hold_record":"LEGAL_HOLD_RECORD","backup_archive":"BACKUP_ARCHIVE",
+        "account_tombstone":"ACCOUNT_TOMBSTONE","data_flow":"DATA_FLOW",
+    }
+    for key,value in explicit_aliases.items():
+        if key in explicit_values: return value
     text=(" ".join(str(data.get(k,"")) for k in ("data_category","category","record_type","collection","collection_name","resource_type","table_name","event_name","type","archive_key","connector_name","file_name"))+" "+context+" "+rid+" "+system).casefold().replace("-","_")
+    if "contact_lookup" in text or "secondary_identifier" in text: return "SECONDARY_IDENTIFIER"
     if "tombstone" in text or "deleted_customer_reference" in text or rid.startswith("tombstone_"): return "ACCOUNT_TOMBSTONE"
     if "legal_hold" in text or "legal hold" in text: return "LEGAL_HOLD_RECORD"
     if "data_flow" in text or "connector" in text or "sync_job" in text or rid.startswith("data_flow_"): return "DATA_FLOW"
@@ -357,6 +373,13 @@ class EvidenceIndex:
                 if stamp<=cutoff:
                     linked_resources.add(rid)
                     ix.update(self.by_resource.get(rid,()))
+        # Once a resource is tied to the subject by a direct identifier in any eligible
+        # observation, pull its other observations too. Later readbacks often omit PII
+        # intentionally, so filtering only by the latest row's identifiers loses 404,
+        # redaction and anonymization evidence.
+        linked_resources.update(self.observations[i]["rid"] for i in ix)
+        for rid in list(linked_resources):
+            ix.update(self.by_resource.get(rid,()))
         expected_users={k for k in aliases if k.startswith("U:")}
         eligible=[]
         for i in ix:
