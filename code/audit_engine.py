@@ -125,7 +125,7 @@ def determine_state(data, cat, raw=""):
 def deletion_requested(text):
     s=(text or "").casefold().replace("’","'")
     if re.search(r"\b(?:do not|don't|dont|never|not)\s+(?:want|wish|need|request|ask)\s+(?:you\s+to\s+)?(?:delete|erase|remove|close|deactivate)\b|\bnot\s+(?:a\s+)?(?:deletion|erasure|account closure)\s+request\b|\bwithout deleting\b|\binstead of deleting\b",s): return False
-    patterns=[r"\bdelete(?:d|s|ing|ion)?\b",r"\berase(?:d|s|ure)?\b",r"\bremove\b.{0,60}\b(?:account|profile|personal data|my data|records?|copy|file)\b",r"\bclose\b.{0,35}\baccount\b",r"\baccount closure\b",r"\bforget\b.{0,40}\b(?:me|my data|my account)\b",r"\beliminar\b",r"\bborrar\b",r"\bsupprimer\b",r"\beffacer\b",r"\blöschen\b",r"\bcancellare\b",r"\bdeletar\b",r"\bapagar\b",r"\b消去\b",r"\b削除\b",r"\b삭제\b"]
+    patterns=[r"\bdelete(?:d|s|ing|ion)?\b",r"\berase(?:d|s|ure)?\b",r"\bsuppression\b",r"\beffacement\b",r"\bremove\b.{0,60}\b(?:account|profile|personal data|my data|records?|copy|file)\b",r"\bclose\b.{0,35}\baccount\b",r"\baccount closure\b",r"\bforget\b.{0,40}\b(?:me|my data|my account)\b",r"\beliminar\b",r"\bborrar\b",r"\bsupprimer\b",r"\beffacer\b",r"\blöschen\b",r"\bcancellare\b",r"\bdeletar\b",r"\bapagar\b",r"\b消去\b",r"\b削除\b",r"\b삭제\b"]
     return any(re.search(p,s) for p in patterns)
 
 def build_users(identities,audit):
@@ -170,10 +170,23 @@ def aliases_for(uid,current,audit,cutoff,email):
 class EvidenceIndex:
     """One-pass file loader with an inverted identifier index and strict time cutoff."""
     def __init__(self):
-        self.manifest=load_csv(DATA/"evidence_files.csv"); self.observations=[]; self.index=defaultdict(list)
+        self.manifest=load_csv(DATA/"evidence_files.csv")
+        self.activities=load_csv(DATA/"system_activity.csv")
+        self.observations=[]; self.index=defaultdict(list); self.by_resource=defaultdict(list); self.activity_index=defaultdict(list)
         self._load()
         for i,o in enumerate(self.observations):
             for key in o["keys"]: self.index[key].append(i)
+            self.by_resource[o["rid"]].append(i)
+        # Activity logs supply linkage only, never proof that a deletion succeeded.
+        for event in self.activities:
+            stamp=dt(event.get("event_time"))
+            rid=str(event.get("resource_id") or "").strip()
+            if not stamp or not rid: continue
+            link_keys=set()
+            for k in ("details","resource_id","source_system","target_system"):
+                link_keys |= identity_keys(event.get(k), k)
+            for key in link_keys:
+                self.activity_index[key].append((stamp,rid))
     def _add(self,data,eid,path,file_ts,obs_ts,sys_hint="",context="",raw=""):
         rid=str(data.get("resource_id") or data.get("record_id") or "").strip()
         if not rid:
@@ -274,7 +287,11 @@ class EvidenceIndex:
             else: self._load_text(path,row,file_ts)
     def for_user(self,aliases,cutoff):
         ix=set()
-        for key in aliases: ix.update(self.index.get(key,()))
+        for key in aliases:
+            ix.update(self.index.get(key,()))
+            for stamp,rid in self.activity_index.get(key,()):
+                if stamp<=cutoff:
+                    ix.update(self.by_resource.get(rid,()))
         found=[self.observations[i] for i in ix if self.observations[i]["file_ts"]<=cutoff and self.observations[i]["obs_ts"]<=cutoff]
         risk={"PRESENT":5,"ACTIVE":5,"REDACTED":2,"ANONYMIZED":2,"DISABLED":1,"BLOCKED":1,"ABSENT":0}
         latest={}
