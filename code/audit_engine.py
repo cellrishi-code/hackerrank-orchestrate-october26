@@ -13,7 +13,7 @@ HASH = re.compile(r"(?i)\b[a-f0-9]{64}\b")
 RES = re.compile(r"(?i)\b(?:account|search|analytics|support|export|marketing|email_delivery|audit_record|tombstone|data_flow|backup|cache|telemetry|legal_hold|attachment|secondary)_[a-z0-9-]+\b")
 TS = re.compile(r"\b20\d{2}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?\b")
 ID_FIELDS = {"user_id","customer_reference","subject_reference","user_reference","requester_id","owner_id","email","email_address","owner_email","customer_email","requester_email","phone","phone_number","email_hash","name","full_name","requester_name","matched_value","lookup_key","subject_key"}
-SYSTEMS = {"account_service":"account_service","profile_service":"account_service","customer_account_service":"account_service","search_service":"search_service","search_index":"search_service","analytics_platform":"analytics_platform","analytics_service":"analytics_platform","support_platform":"support_platform","support_service":"support_platform","export_service":"export_service","user_export_store":"export_service","marketing_service":"marketing_service","email_delivery_service":"email_delivery_service","notification_service":"notification_service","security_service":"security_service","identity_service":"identity_service","integration_service":"integration_service","connector_service":"integration_service","backup_service":"backup_service","archive_service":"backup_service","cache_service":"cache_service","legal_service":"legal_service"}
+SYSTEMS = {"account_service":"account_service","profile_service":"account_service","customer_account_service":"account_service","search_service":"search_service","search_index":"search_service","analytics_platform":"analytics_platform","analytics_service":"analytics_platform","support_platform":"support_platform","support_service":"support_platform","export_service":"export_service","user_export_store":"export_service","marketing_service":"marketing_service","marketing_platform":"marketing_service","email_delivery_service":"email_delivery_service","notification_service":"notification_service","security_service":"security_service","identity_service":"identity_service","integration_service":"integration_service","connector_service":"integration_service","backup_service":"backup_service","archive_service":"backup_service","cache_service":"cache_service","legal_service":"legal_service"}
 PREFIX = {"account":"account_service","search":"search_service","analytics":"analytics_platform","support":"support_platform","export":"export_service","marketing":"marketing_service","email_delivery":"email_delivery_service","audit_record":"security_service","tombstone":"identity_service","data_flow":"integration_service","backup":"backup_service","cache":"cache_service","telemetry":"analytics_platform","legal_hold":"legal_service","attachment":"support_platform","secondary":"identity_service"}
 DELETE = {"USER_PROFILE","SECONDARY_IDENTIFIER","SEARCH_INDEX_ENTRY","CACHE_ENTRY","SUPPORT_ATTACHMENT","USER_EXPORT","MARKETING_PROFILE"}
 REDACT = {"SUPPORT_MESSAGE","EMAIL_DELIVERY_LOG","ACCOUNT_TOMBSTONE"}
@@ -343,7 +343,12 @@ class EvidenceIndex:
             if obs["file_ts"]>cutoff or obs["obs_ts"]>cutoff: continue
             observed_users={k for k in obs["keys"] if k.startswith("U:")}
             # Prevent a reused email or misleading cross-reference from pulling another user's record.
-            if expected_users and observed_users and not (expected_users & observed_users): continue
+            if expected_users and observed_users and not (expected_users & observed_users):
+                direct_ids={k for k in obs["keys"] if k.startswith(("E:","P:","N:","H:"))}
+                # Shared support conversations and delivery logs can contain the subject's PII
+                # while retaining another person's stable reference. Do not filter those away.
+                shared_context=obs["cat"] in {"SUPPORT_MESSAGE","EMAIL_DELIVERY_LOG"} and bool(direct_ids & aliases)
+                if not shared_context: continue
             eligible.append(obs)
         risk={"PRESENT":5,"ACTIVE":5,"REDACTED":2,"ANONYMIZED":2,"DISABLED":1,"BLOCKED":1,"ABSENT":0}
         latest={}
