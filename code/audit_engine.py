@@ -375,7 +375,7 @@ class EvidenceIndex:
             for row in sorted(self.manifest,key=lambda r:r.get("file_id",""))
         )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
-    def for_user(self,aliases,cutoff):
+    def for_user(self,aliases,cutoff,request_text="",reported_at=None):
         expected_users={k for k in aliases if k.startswith("U:")}
         def time_eligible(obs):
             return obs["file_ts"]<=cutoff and obs["obs_ts"]<=cutoff
@@ -425,6 +425,34 @@ class EvidenceIndex:
             obs=self.observations[i]
             if time_eligible(obs) and identity_eligible(obs):
                 eligible.append(obs)
+        # Some explicit check events are evidence of the state they directly inspected,
+        # unlike generic worker status messages. Use them only when the request explicitly
+        # names that domain and the check is close to its reported processing time.
+        request_lower=(request_text or "").casefold()
+        report_stamp=dt(reported_at)
+        if report_stamp:
+            backup_scope=bool(re.search(r"\b(?:backup|restore|archive)\b",request_lower))
+            flow_scope=bool(re.search(r"\b(?:integration|integrations|sync|synchroni[sz]e|recreate|copy(?:ing)? (?:my )?data)\b",request_lower))
+            for event in self.activities:
+                stamp=dt(event.get("event_time"))
+                rid=str(event.get("resource_id") or "").strip()
+                kind=str(event.get("event_type") or "").upper()
+                detail=str(event.get("details") or "")
+                if not stamp or not rid or stamp>cutoff or abs((stamp-report_stamp).total_seconds())>90*60: continue
+                if backup_scope and kind=="CHECK_RESTORE_ACCESS" and re.search(r"can still be restored|remains restorable|restore access remains enabled",detail,re.I):
+                    eligible.append({"rid":rid,"system":"backup_service","cat":"BACKUP_ARCHIVE","state":"ACTIVE",
+                                     "eid":str(event.get("activity_id") or ""),"file_ts":stamp,"obs_ts":stamp,
+                                     "keys":set(),"data":event,"raw":detail,"path":"dataset/system_activity.csv"})
+                elif flow_scope and kind=="CHECK_DATA_FLOW":
+                    if re.search(r"remains enabled|is enabled|still active",detail,re.I):
+                        state="ACTIVE"
+                    elif re.search(r"is disabled|remains disabled|is no longer enabled|has stopped",detail,re.I):
+                        state="DISABLED"
+                    else:
+                        continue
+                    eligible.append({"rid":rid,"system":"integration_service","cat":"DATA_FLOW","state":state,
+                                     "eid":str(event.get("activity_id") or ""),"file_ts":stamp,"obs_ts":stamp,
+                                     "keys":set(),"data":event,"raw":detail,"path":"dataset/system_activity.csv"})
         risk={"PRESENT":5,"ACTIVE":5,"REDACTED":2,"ANONYMIZED":2,"DISABLED":1,"BLOCKED":1,"ABSENT":0}
         latest={}
         resource_categories=defaultdict(set)
