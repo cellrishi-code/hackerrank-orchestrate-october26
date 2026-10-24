@@ -124,7 +124,7 @@ def determine_state(data, cat, raw=""):
 
 def deletion_requested(text):
     s=(text or "").casefold().replace("’","'")
-    if re.search(r"\b(?:do not|don't|dont|never|not)\s+(?:want|wish|need|request|ask)\s+(?:you\s+to\s+)?(?:delete|erase|remove|close|deactivate)\b|\bnot\s+(?:a\s+)?(?:deletion|erasure|account closure)\s+request\b|\bwithout deleting\b|\binstead of deleting\b",s): return False
+    if re.search(r"\b(?:do not|don't|dont|never)\s+(?:delete|erase|remove|close|deactivate)\b|\b(?:do not|don't|dont|never|not)\s+(?:want|wish|need|request|ask)\s+(?:you\s+to\s+)?(?:delete|erase|remove|close|deactivate)\b|\bnot\s+(?:a\s+)?(?:deletion|erasure|account closure)\s+request\b|\bwithout deleting\b|\binstead of deleting\b",s): return False
     patterns=[r"\bdelete(?:d|s|ing|ion)?\b",r"\berase(?:d|s|ure)?\b",r"\bsuppression\b",r"\beffacement\b",r"\bremove\b.{0,60}\b(?:account|profile|personal data|my data|records?|copy|file)\b",r"\bclose\b.{0,35}\baccount\b",r"\baccount closure\b",r"\bforget\b.{0,40}\b(?:me|my data|my account)\b",r"\beliminar\b",r"\bborrar\b",r"\bsupprimer\b",r"\beffacer\b",r"\blöschen\b",r"\bcancellare\b",r"\bdeletar\b",r"\bapagar\b",r"\b消去\b",r"\b削除\b",r"\b삭제\b"]
     return any(re.search(p,s) for p in patterns)
 
