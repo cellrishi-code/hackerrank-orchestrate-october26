@@ -90,7 +90,7 @@ def categorize(data, system, rid, context=""):
     }
     for key,value in explicit_aliases.items():
         if key in explicit_values: return value
-    text=(" ".join(str(data.get(k,"")) for k in ("data_category","category","record_type","collection","collection_name","resource_type","table_name","event_name","type","archive_key","connector_name","file_name"))+" "+context+" "+rid+" "+system).casefold().replace("-","_")
+    text=(" ".join(str(data.get(k,"")) for k in ("data_category","category","record_type","collection","collection_name","resource_type","table_name","event","event_name","type","archive_key","connector_name","file_name"))+" "+context+" "+rid+" "+system).casefold().replace("-","_")
     if "contact_lookup" in text or "contact_query" in text or "contact_record" in text or "secondary_identifier" in text: return "SECONDARY_IDENTIFIER"
     if "tombstone" in text or "deleted_customer_reference" in text or rid.startswith("tombstone_"): return "ACCOUNT_TOMBSTONE"
     if "legal_hold" in text or "legal hold" in text: return "LEGAL_HOLD_RECORD"
@@ -273,13 +273,16 @@ class EvidenceIndex:
                     scopes.add((system,cat))
                     stamp=dt(data.get("observed_at") or data.get("updated_at") or data.get("captured_at")) or file_ts
                     self._add(data,row["file_id"],path,file_ts,stamp,hint,table,json.dumps(data,ensure_ascii=False))
-                if table.casefold().startswith("customer_data_"):
+                # Schema-only inventories have no proof that their empty tables represent
+                # a complete snapshot. Never infer deletion from those empty tables.
+                if resource_ids and table.casefold().startswith("customer_data_"):
                     self.coverage.append({"eid":row["file_id"],"file_ts":file_ts,"obs_ts":file_ts,"system":"*","cat":"*","rids":resource_ids})
-                elif scopes:
+                elif resource_ids and scopes:
                     for system,cat in scopes:
                         ids={rid for rid in resource_ids if any(o["rid"]==rid and o["system"]==system and o["cat"]==cat for o in self.observations if o["eid"]==row["file_id"])}
-                        self.coverage.append({"eid":row["file_id"],"file_ts":file_ts,"obs_ts":file_ts,"system":system,"cat":cat,"rids":ids})
-                else:
+                        if ids:
+                            self.coverage.append({"eid":row["file_id"],"file_ts":file_ts,"obs_ts":file_ts,"system":system,"cat":cat,"rids":ids})
+                elif resource_ids:
                     t=table.casefold()
                     hints=[("account","account_service","USER_PROFILE"),("profile","account_service","USER_PROFILE"),("search","search_service","SEARCH_INDEX_ENTRY"),("analytics","analytics_platform","ANALYTICS_PROFILE"),("support","support_platform","SUPPORT_MESSAGE"),("attachment","support_platform","SUPPORT_ATTACHMENT"),("export","export_service","USER_EXPORT"),("marketing","marketing_service","MARKETING_PROFILE"),("backup","backup_service","BACKUP_ARCHIVE"),("audit","security_service","SECURITY_AUDIT_LOG"),("cache","cache_service","CACHE_ENTRY")]
                     match=next(((s,cat) for token,s,cat in hints if token in t),None)
