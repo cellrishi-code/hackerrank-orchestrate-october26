@@ -87,7 +87,7 @@ def categorize(data, system, rid, context=""):
     for key,value in explicit_aliases.items():
         if key in explicit_values: return value
     text=(" ".join(str(data.get(k,"")) for k in ("data_category","category","record_type","collection","collection_name","resource_type","table_name","event_name","type","archive_key","connector_name","file_name"))+" "+context+" "+rid+" "+system).casefold().replace("-","_")
-    if "contact_lookup" in text or "secondary_identifier" in text: return "SECONDARY_IDENTIFIER"
+    if "contact_lookup" in text or "contact_query" in text or "contact_record" in text or "secondary_identifier" in text: return "SECONDARY_IDENTIFIER"
     if "tombstone" in text or "deleted_customer_reference" in text or rid.startswith("tombstone_"): return "ACCOUNT_TOMBSTONE"
     if "legal_hold" in text or "legal hold" in text: return "LEGAL_HOLD_RECORD"
     if "data_flow" in text or "connector" in text or "sync_job" in text or rid.startswith("data_flow_"): return "DATA_FLOW"
