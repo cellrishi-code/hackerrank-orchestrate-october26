@@ -210,7 +210,10 @@ class EvidenceIndex:
                 self.activity_index[key].append((stamp,rid))
     def _add(self,data,eid,path,file_ts,obs_ts,sys_hint="",context="",raw=""):
         rid=str(data.get("resource_id") or data.get("record_id") or "").strip()
-        if not rid:
+        # Ignore PDF/image/document object identifiers such as object_19; they are
+        # file-internal references, not platform records. Prefer a valid resource ID
+        # present in the same evidence line when the structured field is not a known ID.
+        if not rid or not RES.fullmatch(rid):
             candidates=RES.findall(raw); rid=candidates[0] if candidates else ""
         if not rid: return
         src=next((data[k] for k in ("data_store","system_id","origin_system","source_system","target_system","system") if data.get(k)),sys_hint)
