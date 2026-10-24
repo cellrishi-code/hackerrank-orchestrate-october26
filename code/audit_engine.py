@@ -403,10 +403,18 @@ class EvidenceIndex:
             eligible.append(obs)
         risk={"PRESENT":5,"ACTIVE":5,"REDACTED":2,"ANONYMIZED":2,"DISABLED":1,"BLOCKED":1,"ABSENT":0}
         latest={}
+        resource_categories=defaultdict(set)
         for o in sorted(eligible,key=lambda x:(x["obs_ts"],x["file_ts"],x["eid"])):
-            key=(o["system"],o["rid"]); prev=latest.get(key)
+            key=(o["system"],o["rid"])
+            resource_categories[key].add(o["cat"])
+            prev=latest.get(key)
             if prev is None or (o["obs_ts"],o["file_ts"])>(prev["obs_ts"],prev["file_ts"]): latest[key]=o
             elif (o["obs_ts"],o["file_ts"])==(prev["obs_ts"],prev["file_ts"]) and risk.get(o["state"],3)>risk.get(prev["state"],3): latest[key]=o
+        # A resource can be described by multiple event types across a log. Carry the
+        # most specific identity-category classification forward to its latest state.
+        for key,o in latest.items():
+            if "SECONDARY_IDENTIFIER" in resource_categories.get(key,set()):
+                o["cat"]="SECONDARY_IDENTIFIER"
         # Synthesize point-in-time absence only when a resource is explicitly linked to this identity
         # by activity and the newest applicable database/collection snapshot omits it.
         for rid in linked_resources:
